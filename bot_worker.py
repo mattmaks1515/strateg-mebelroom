@@ -18,11 +18,12 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import threading
 import time
 
 from common import AppError, LOGS_DIR, eprint, load_env, parse_id_list, require_env
 from telegram_io import tg_call, get_me, send, send_typing, addressed_to_bot
-from brain import build_system_prompt
+import brain
 from advisor import ask
 import bitrix_stats
 import digest
@@ -116,26 +117,58 @@ HELP_TEXT = (
     "конкуренты, найм, цены, расширение, экономика заказа — разберу глубоко и с "
     "trade-offs.\n\n"
     "Команды:\n"
-    "/reset — забыть наш прошлый разговор и начать заново\n"
+    "/правка <текст> — задать мне постоянную правку поведения. Например:\n"
+    "   /правка отвечай короче, без длинных вступлений\n"
+    "   /правка всегда предлагай конкретный следующий шаг\n"
+    "Правка запоминается навсегда и действует сразу.\n"
+    "/правки — показать все мои текущие правки\n"
+    "/сброс_правок — убрать все правки\n"
+    "/reset — забыть наш прошлый разговор\n"
     "/help — эта справка"
 )
 
 
 def _handle_command(cmd: str, chat_id, user_id: int, reply_to, thread_id) -> bool:
     """Обрабатывает служебные команды. True — если это была команда (ответ отправлен)."""
-    c = cmd.lower().lstrip("/").split("@")[0].split()[0] if cmd.lstrip("/").strip() else ""
-    if c in ("start", "help"):
+    parts = cmd.strip().split(maxsplit=1)
+    name = parts[0].lower().lstrip("/").split("@")[0] if parts else ""
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if name in ("start", "help"):
         send(chat_id, HELP_TEXT, reply_to, thread_id)
         return True
-    if c == "reset":
+    if name == "reset":
         memory.reset(user_id)
         send(chat_id, "Готово — забыл наш прошлый разговор. Начнём с чистого листа.", reply_to, thread_id)
+        return True
+    if name in ("правка", "запомни"):
+        if not arg:
+            send(chat_id, "Напиши правку после команды. Например:\n/правка отвечай короче",
+                 reply_to, thread_id)
+            return True
+        brain.add_override(arg)
+        send(chat_id, f"Готово, запомнил как постоянную правку и применю сразу:\n{arg}",
+             reply_to, thread_id)
+        return True
+    if name in ("правки", "мои_правки"):
+        ov = brain.load_overrides()
+        send(chat_id, ("Мои текущие правки:\n\n" + ov) if ov else "Пока правок нет.",
+             reply_to, thread_id)
+        return True
+    if name in ("сброс_правок", "сбросить_правки", "очистить_правки"):
+        brain.clear_overrides()
+        send(chat_id, "Убрал все правки. Работаю по базовым инструкциям.", reply_to, thread_id)
         return True
     return False
 
 
-def handle_message(msg: dict, bot_username: str, bot_id: int,
-                   allowed_ids: set, system_prompt: str) -> None:
+def _typing_loop(chat_id, thread_id, stop: threading.Event) -> None:
+    """Держит статус «печатает…» живым, пока идёт долгий ответ модели."""
+    while not stop.wait(4):
+        send_typing(chat_id, thread_id)
+
+
+def handle_message(msg: dict, bot_username: str, bot_id: int, allowed_ids: set) -> None:
     chat = msg.get("chat") or {}
     frm = msg.get("from") or {}
     user_id = frm.get("id")
@@ -156,13 +189,22 @@ def handle_message(msg: dict, bot_username: str, bot_id: int,
         if not clean:
             return
 
+    # мозг собираем свежим на каждый вопрос: правки (/правка) и company.md применяются сразу
+    system_prompt = brain.build_system_prompt()
+
+    stop = threading.Event()
+    typer = threading.Thread(target=_typing_loop, args=(chat.get("id"), thread_id, stop), daemon=True)
     send_typing(chat.get("id"), thread_id)
+    typer.start()
     try:
         history = memory.load_history(user_id)
         reply = ask(clean, system_prompt, history, live_data=bitrix_context())
     except Exception as exc:
+        stop.set()
         send(chat.get("id"), f"Не смог обработать запрос: {exc}", reply_to, thread_id)
         return
+    finally:
+        stop.set()
 
     send(chat.get("id"), reply, reply_to, thread_id)
     memory.save_turn(user_id, clean, reply)
@@ -178,7 +220,7 @@ def main() -> int:
     # проверим ключ Anthropic заранее — понятная ошибка при старте, а не в первом ответе
     require_env("ANTHROPIC_API_KEY")
 
-    system_prompt = build_system_prompt()
+    system_prompt = brain.build_system_prompt()
     bot_username, bot_id = get_me()
     eprint(f"[worker] запущен как @{bot_username}, пользователей в whitelist: {len(allowed_ids)}, "
            f"system-prompt: {len(system_prompt)} символов")
@@ -198,7 +240,7 @@ def main() -> int:
                 offset = u.get("update_id", 0) + 1
                 m = u.get("message")
                 if m:
-                    handle_message(m, bot_username, bot_id, allowed_ids, system_prompt)
+                    handle_message(m, bot_username, bot_id, allowed_ids)
         except AppError as exc:
             eprint(f"[worker] ошибка конфигурации: {exc}")
             time.sleep(5)

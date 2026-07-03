@@ -23,7 +23,9 @@ from common import make_ssl_context
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-fable-5"
 DEFAULT_MAX_TOKENS = 4096
-MAX_CONTINUATIONS = 5  # сколько раз досылаем запрос при pause_turn (серверный цикл поиска)
+DEFAULT_TIMEOUT = 600      # сек. Fable 5 + веб-поиск на сложных вопросах думает минутами
+DEFAULT_EFFORT = "medium"  # глубина/скорость: low|medium|high|xhigh|max (medium — баланс для чата)
+MAX_CONTINUATIONS = 5      # сколько раз досылаем запрос при pause_turn (серверный цикл поиска)
 
 
 def _web_search_enabled() -> bool:
@@ -73,7 +75,7 @@ def _call_api(body: dict, api_key: str, timeout: int) -> dict:
 
 
 def ask(user_text: str, system_prompt: str, history: list[dict],
-        *, live_data: str = "", timeout: int = 180) -> str:
+        *, live_data: str = "", timeout: int | None = None) -> str:
     """Возвращает текст ответа советника. Бросает RuntimeError при ошибке сети/API.
 
     live_data — свежие цифры из Битрикса на текущий запрос. Кладём их в текст
@@ -86,6 +88,12 @@ def ask(user_text: str, system_prompt: str, history: list[dict],
         max_tokens = int(os.environ.get("ANTHROPIC_MAX_TOKENS", DEFAULT_MAX_TOKENS))
     except ValueError:
         max_tokens = DEFAULT_MAX_TOKENS
+    if timeout is None:
+        try:
+            timeout = int(os.environ.get("ANTHROPIC_TIMEOUT", DEFAULT_TIMEOUT))
+        except ValueError:
+            timeout = DEFAULT_TIMEOUT
+    effort = os.environ.get("ANTHROPIC_EFFORT", DEFAULT_EFFORT).strip()
 
     content = user_text
     if live_data:
@@ -104,6 +112,8 @@ def ask(user_text: str, system_prompt: str, history: list[dict],
             "system": system_prompt,
             "messages": messages,
         }
+        if effort:
+            body["output_config"] = {"effort": effort}  # глубина рассуждений (не thinking — на Fable 5 ок)
         if tools:
             body["tools"] = tools
         data = _call_api(body, api_key, timeout)

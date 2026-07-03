@@ -10,6 +10,7 @@ logs/dialogs/
 # Рантайм-состояние (не секреты, но и не нужно в гите)
 logs/digest_state.json
 logs/state.json
+logs/overrides.md
 
 # Локальные настройки Claude Code
 .claude/

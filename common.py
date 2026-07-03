@@ -46,6 +46,7 @@ DIALOGS_DIR = LOGS_DIR / "dialogs"      # память диалогов по п�
 CLAUDE_MD = PROJECT_DIR / "CLAUDE.md"
 COMPANY_MD = PROJECT_DIR / "company.md"
 DECISIONS_MD = LOGS_DIR / "decisions.md"
+OVERRIDES_MD = LOGS_DIR / "overrides.md"   # правки владельца из Telegram (высший приоритет)
 
 
 class AppError(RuntimeError):
