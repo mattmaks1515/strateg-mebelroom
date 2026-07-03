@@ -1,0 +1,16 @@
+[Unit]
+Description=Strateg Mebelroom Telegram bot (24/7 advisor worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/strateg-mebelroom
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Yekaterinburg
+ExecStart=/usr/bin/python3 /root/strateg-mebelroom/bot_worker.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
