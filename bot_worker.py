@@ -162,10 +162,22 @@ def _handle_command(cmd: str, chat_id, user_id: int, reply_to, thread_id) -> boo
     return False
 
 
+NOTICE_AFTER = 24  # сек: через сколько предупредить, что ответ будет не сразу
+LONG_NOTICE = (
+    "Секунду — вопрос ёмкий, собираю данные и думаю. "
+    "Для разбора конкурента с веб-поиском нужно несколько минут. Пришлю, как будет готово."
+)
+
+
 def _typing_loop(chat_id, thread_id, stop: threading.Event) -> None:
-    """Держит статус «печатает…» живым, пока идёт долгий ответ модели."""
+    """Держит статус «печатает…» живым и один раз предупреждает, если ответ затянулся."""
+    waited, notified = 0.0, False
     while not stop.wait(4):
+        waited += 4
         send_typing(chat_id, thread_id)
+        if not notified and waited >= NOTICE_AFTER:
+            send(chat_id, LONG_NOTICE, None, thread_id)
+            notified = True
 
 
 def handle_message(msg: dict, bot_username: str, bot_id: int, allowed_ids: set) -> None:
