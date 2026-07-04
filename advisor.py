@@ -22,7 +22,7 @@ from common import make_ssl_context
 
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-fable-5"
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 16000  # запас на размышления Fable 5 (особенно при effort=high/max) + сам ответ
 DEFAULT_TIMEOUT = 600      # сек. Fable 5 + веб-поиск на сложных вопросах думает минутами
 DEFAULT_EFFORT = "medium"  # глубина/скорость: low|medium|high|xhigh|max (medium — баланс для чата)
 MAX_CONTINUATIONS = 5      # сколько раз досылаем запрос при pause_turn (серверный цикл поиска)
@@ -95,6 +95,13 @@ def ask(user_text: str, system_prompt: str, history: list[dict],
             timeout = DEFAULT_TIMEOUT
     effort = os.environ.get("ANTHROPIC_EFFORT", DEFAULT_EFFORT).strip()
 
+    # Fable 5 думает всегда; на высоком effort мышление съедает лимит токенов. Если
+    # max_tokens мал — ответ обрывается на «мыслях», текста не остаётся (пустой ответ).
+    # Поэтому на high/xhigh/max поднимаем потолок до безопасного минимума.
+    floor = {"max": 24000, "xhigh": 12000, "high": 8000}.get(effort.lower(), 0)
+    if floor and max_tokens < floor:
+        max_tokens = floor
+
     content = user_text
     if live_data:
         content = (
@@ -126,4 +133,9 @@ def ask(user_text: str, system_prompt: str, history: list[dict],
     text = "".join(
         b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
     ).strip()
-    return text or "Не удалось сформулировать ответ — переформулируй вопрос, пожалуйста."
+    if text:
+        return text
+    if data.get("stop_reason") == "max_tokens":
+        return ("Ответ получился слишком объёмным и не поместился целиком. "
+                "Задай вопрос поконкретнее — разберу.")
+    return "Не удалось сформулировать ответ — переформулируй вопрос, пожалуйста."
